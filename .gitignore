@@ -1,0 +1,22 @@
+# Generated K3s runtime state and credentials
+state/
+kubeconfig.yaml
+
+# Host-specific/generated NVIDIA CDI specifications
+cdi/*.json
+
+# Generated runtime logs; keep the checked-in test report instead
+logs/k3s-startup.log
+
+# Local Docker/build artifacts
+*.tar
+*.tar.gz
+*.img
+*.iso
+*.qcow2
+*.raw
+*.bin
+
+# Common local/editor files
+.DS_Store
+*.swp

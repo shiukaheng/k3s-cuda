@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: k3s-gpu-test-nvidia-smi
+spec:
+  restartPolicy: Never
+  containers:
+    - name: nvidia-smi
+      image: nvidia/cuda:12.8.1-base-ubuntu24.04
+      command: ["nvidia-smi"]
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+      volumeMounts:
+        # Docker injected this matching driver tree into the outer K3s node.
+        - name: nvidia-libraries
+          mountPath: /usr/local/nvidia
+          readOnly: true
+        - name: nvidia-smi
+          mountPath: /usr/bin/nvidia-smi
+          readOnly: true
+        - name: nix-store
+          mountPath: /nix/store
+          readOnly: true
+  volumes:
+    - name: nvidia-libraries
+      hostPath:
+        path: /usr/local/nvidia
+    - name: nvidia-smi
+      hostPath:
+        path: /usr/bin/nvidia-smi
+        type: File
+    - name: nix-store
+      hostPath:
+        # Docker's outer GPU injection exposes only the needed Nix derivations.
+        path: /nix/store

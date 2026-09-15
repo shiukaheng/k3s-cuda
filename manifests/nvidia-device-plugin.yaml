@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nvidia-device-plugin
+  namespace: kube-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-daemonset
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: nvidia-device-plugin-ds
+  template:
+    metadata:
+      labels:
+        name: nvidia-device-plugin-ds
+    spec:
+      serviceAccountName: nvidia-device-plugin
+      tolerations:
+        - operator: Exists
+      containers:
+        - image: nvcr.io/nvidia/k8s-device-plugin:v0.17.1
+          name: nvidia-device-plugin-ctr
+          args:
+            - --fail-on-init-error=true
+            - --pass-device-specs=true
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+            # These paths are injected into the outer K3s container by Docker.
+            # The plugin needs NVML and device nodes to advertise inventory.
+            - name: nvidia-libraries
+              mountPath: /usr/local/nvidia
+              readOnly: true
+            - name: host-dev
+              mountPath: /dev
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: nvidia-libraries
+          hostPath:
+            path: /usr/local/nvidia
+        - name: host-dev
+          hostPath:
+            path: /dev
