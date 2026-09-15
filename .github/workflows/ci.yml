@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check shell syntax
-        run: sh -n entrypoint.sh nvidia-ctk-wrapper.sh
+        run: sh -n entrypoint.sh nvidia-ctk-wrapper.sh scripts/*.sh
       - name: Run ShellCheck
         uses: ludeeus/action-shellcheck@2.0.0
       - name: Reject workload host paths
@@ -24,5 +24,17 @@ jobs:
             echo 'Portable workload contains a forbidden host path.' >&2
             exit 1
           fi
+      - name: Validate appliance isolation
+        run: |
+          docker compose config > /tmp/compose.yaml
+          if grep -E '^    (network_mode|ports|gpus):' /tmp/compose.yaml; then
+            echo 'Base Compose configuration must not expose the host network or require a GPU.' >&2
+            exit 1
+          fi
+          COMPOSE_FILE=compose.yaml:compose.gpu.yaml docker compose config | grep -q '^    gpus:'
       - name: Build image
         run: docker compose build
+      - name: Check image contents
+        run: |
+          docker run --rm --entrypoint tailscale k3s-cuda:v1.36.0-k3s1 version
+          docker run --rm --entrypoint k3s k3s-cuda:v1.36.0-k3s1 server --help | grep -q -- '--vpn-auth-file'

@@ -1,10 +1,13 @@
 ARG K3S_VERSION=v1.36.0-k3s1
 ARG NVIDIA_TOOLKIT_IMAGE=nvcr.io/nvidia/k8s/container-toolkit:v1.17.8-ubuntu20.04
+ARG TAILSCALE_IMAGE=tailscale/tailscale:v1.102.3
 
 FROM alpine:3.22 AS tools
 RUN apk add --no-cache patchelf
 
 FROM ${NVIDIA_TOOLKIT_IMAGE} AS nvidia-toolkit
+
+FROM ${TAILSCALE_IMAGE} AS tailscale
 
 FROM rancher/k3s:${K3S_VERSION}
 
@@ -26,9 +29,13 @@ COPY --from=tools /usr/bin/patchelf /usr/local/bin/patchelf
 COPY --from=tools /lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
 COPY --from=tools /usr/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
 COPY --from=tools /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
+COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
 
 COPY entrypoint.sh /usr/local/bin/k3s-gpu-entrypoint
 COPY nvidia-ctk-wrapper.sh /usr/bin/nvidia-ctk
+COPY scripts/appliance-health.sh /usr/local/bin/appliance-health
+COPY scripts/appliance-status.sh /usr/local/bin/appliance-status
 COPY manifests/nvidia-device-plugin.yaml /usr/local/share/k3s/nvidia-device-plugin.yaml
 
 ARG K3S_VERSION
@@ -38,4 +45,3 @@ LABEL org.opencontainers.image.title="containerized-k3s-gpu-node" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 ENTRYPOINT ["/usr/local/bin/k3s-gpu-entrypoint"]
-CMD ["agent"]

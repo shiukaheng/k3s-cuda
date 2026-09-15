@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: k3s-network-test
+spec:
+  selector:
+    matchLabels:
+      app: k3s-network-test
+  template:
+    metadata:
+      labels:
+        app: k3s-network-test
+    spec:
+      automountServiceAccountToken: false
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: test
+          image: alpine:3.22
+          command: ["sleep", "infinity"]

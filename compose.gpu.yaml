@@ -1,0 +1,3 @@
+services:
+  k3s:
+    gpus: all

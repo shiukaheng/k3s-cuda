@@ -1,14 +1,192 @@
-# K3s With NVIDIA Support
+# Portable K3s Node Appliance
 
-This is a drop-in derivative of the official `rancher/k3s` image that adds NVIDIA GPU support. It keeps the upstream K3s binary, embedded containerd, defaults, commands, flags, and environment variables unchanged.
-
-Use it like `rancher/k3s`, with one additional Docker option:
+Run a self-contained K3s node inside Docker with optional NVIDIA GPU support and Tailscale networking. Add machines to your cluster without installing K3s or Tailscale on the host.
 
 ```text
---gpus all
+computer appears
+      |
+docker compose up -d
+      v
+cluster gains CPU, RAM, and an optional GPU
 ```
 
-GPU workloads then need only:
+K3s, Tailscale, containerd, CNI state, and Kubernetes networking stay inside the container. No host networking or Kubernetes ports are published, so applications on the workstation keep their normal host port namespace.
+
+The appliance uses one container because K3s's supported Tailscale integration expects the Tailscale CLI, `tailscaled`, `tailscale0`, and Flannel in the same network namespace. Tailscale authenticates before K3s starts; K3s then uses its native Tailscale VPN provider to advertise each node's pod route.
+
+## Before You Start
+
+Install Docker and Docker Compose on every computer. Do not install K3s or Tailscale on the host.
+
+Create a reusable, pre-approved Tailscale auth key. A tagged key is recommended so device-key expiry is disabled. K3s nodes advertise their assigned pod subnets through Tailscale, so configure the tailnet once to approve the cluster pod CIDR and permit node and pod traffic. For the default `10.42.0.0/16` pod CIDR, a policy can include:
+
+```json
+{
+  "tagOwners": {
+    "tag:k3s": ["autogroup:admin"]
+  },
+  "autoApprovers": {
+    "routes": {
+      "10.42.0.0/16": ["tag:k3s"]
+    }
+  },
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["tag:k3s", "10.42.0.0/16"],
+      "dst": ["tag:k3s:*", "10.42.0.0/16:*"]
+    }
+  ]
+}
+```
+
+Create the auth key with `tag:k3s`. Without `autoApprovers`, routes must be approved manually whenever a new node joins.
+
+## 1. Server Setup
+
+On the first computer:
+
+```bash
+git clone https://github.com/shiukaheng/k3s-cuda
+cd k3s-cuda
+cp .env.example .env
+```
+
+Set at least:
+
+```env
+K3S_ROLE=server
+K3S_SERVER=
+K3S_TOKEN=
+
+TS_AUTHKEY=tskey-auth-replace-me
+TS_HOSTNAME=k3s-server
+TS_CONTROL_URL=
+
+COMPOSE_FILE=compose.yaml
+```
+
+For an NVIDIA computer, use `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` after completing the GPU prerequisites below.
+
+Start the appliance:
+
+```bash
+docker compose up -d
+./scripts/status.sh
+```
+
+Generate a worker configuration after the server is ready:
+
+```bash
+./scripts/get-token.sh
+```
+
+The command prints the server's Tailscale IP and generated K3s token. It does not print your Tailscale auth key.
+
+## 2. Worker Setup
+
+On every worker computer:
+
+```bash
+git clone https://github.com/shiukaheng/k3s-cuda
+cd k3s-cuda
+cp .env.example .env
+```
+
+Use the values from `./scripts/get-token.sh`, add the Tailscale auth key, and choose a unique Tailscale hostname:
+
+```env
+K3S_ROLE=agent
+K3S_SERVER=100.x.y.z
+K3S_TOKEN=K10...
+
+TS_AUTHKEY=tskey-auth-replace-me
+TS_HOSTNAME=k3s-worker-b
+TS_CONTROL_URL=
+
+COMPOSE_FILE=compose.yaml
+```
+
+Then run:
+
+```bash
+docker compose up -d
+./scripts/status.sh
+```
+
+`K3S_SERVER` may also be the server's MagicDNS name, such as `k3s-server`. The Tailscale IP printed by `get-token.sh` is the most deterministic choice.
+
+## 3. GPU Prerequisites
+
+On an NVIDIA machine, install the matching host driver and NVIDIA Container Toolkit, then configure Docker according to NVIDIA's installation instructions. This must succeed:
+
+```bash
+docker run --rm --gpus all \
+  nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
+```
+
+Select the GPU Compose override in `.env`:
+
+```env
+COMPOSE_FILE=compose.yaml:compose.gpu.yaml
+```
+
+Now `docker compose up -d` injects the host driver and GPUs. The appliance configures CDI, and the cluster-wide NVIDIA device plugin advertises `nvidia.com/gpu` on that node.
+
+Docker Compose cannot make a GPU reservation optional: `gpus: all` fails before the container starts when NVIDIA support is absent. Keeping that one reservation in an override is what allows the same image and base configuration to work safely on CPU-only computers.
+
+## 4. CPU-Only Setup
+
+No NVIDIA packages are needed. Keep:
+
+```env
+COMPOSE_FILE=compose.yaml
+```
+
+The entrypoint detects that no driver was injected, skips GPU setup, and starts a normal CPU K3s node. The NVIDIA device-plugin DaemonSet remains healthy but advertises no GPU resources on that node.
+
+## 5. Headscale Setup
+
+Set the externally reachable Headscale control URL on every node:
+
+```env
+TS_CONTROL_URL=https://headscale.example.com
+```
+
+Use a reusable Headscale pre-auth key as `TS_AUTHKEY`. Headscale must approve the advertised pod routes and allow traffic between the node identities and `10.42.0.0/16`, equivalent to the Tailscale policy above.
+
+## 6. Verify The Cluster
+
+Show appliance status:
+
+```bash
+./scripts/status.sh
+```
+
+On the server, inspect all nodes:
+
+```bash
+docker compose exec k3s k3s kubectl get nodes -o wide
+```
+
+Test pod connectivity in both directions between every node:
+
+```bash
+./scripts/test-network.sh
+```
+
+On a GPU cluster, test scheduling and CDI injection:
+
+```bash
+docker compose exec -T k3s k3s kubectl apply -f - \
+  < manifests/gpu-test-portable.yaml
+docker compose exec k3s k3s kubectl wait \
+  --for=jsonpath='{.status.phase}'=Succeeded \
+  pod/k3s-gpu-test-portable --timeout=180s
+docker compose exec k3s k3s kubectl logs k3s-gpu-test-portable
+```
+
+Kubernetes workloads request a GPU normally:
 
 ```yaml
 resources:
@@ -16,137 +194,42 @@ resources:
     nvidia.com/gpu: 1
 ```
 
-No workload `hostPath`, `/nix/store`, `/usr/local/nvidia`, or `RuntimeClass` is required.
-
-## What The Image Changes
-
-The image is based directly on `rancher/k3s:v1.36.0-k3s1`. It does not rebuild K3s, replace embedded containerd, or change K3s configuration.
-
-It adds only:
-
-- NVIDIA `nvidia-ctk`, `ldconfig`, and their minimal runtime libraries for CDI injection
-- NVIDIA device plugin v0.17.1, configured with `cdi-cri`
-- a small entrypoint that prepares Docker-injected driver files, installs the device-plugin manifest on servers, and then runs `/bin/k3s` with the original arguments
-- `patchelf` for the conditional NixOS compatibility fix described below
-
-The image does not contain an NVIDIA driver, CUDA toolkit, or workload image. Docker supplies the host's matching driver and devices.
-
-```text
-host NVIDIA driver -> Docker GPU injection -> K3s container
-  -> NVIDIA device plugin/CDI -> K3s containerd -> GPU workload
-```
-
-## Requirements
-
-- x86_64 Linux
-- NVIDIA driver
-- Docker with NVIDIA Container Toolkit integration
-
-Confirm Docker GPU injection works first:
+Stop or restart the appliance without losing identity:
 
 ```bash
-docker run --rm --gpus all \
-  nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
-```
-
-## Run A Server
-
-This follows the official K3s Docker example, adding only `--gpus all` and this image name:
-
-```bash
-docker build -t k3s-cuda:v1.36.0-k3s1 .
-
-docker run --privileged \
-  --gpus all \
-  --name k3s-server-1 \
-  --hostname k3s-server-1 \
-  -p 6443:6443 \
-  -d k3s-cuda:v1.36.0-k3s1 \
-  server
-```
-
-Copy the kubeconfig and test the GPU:
-
-```bash
-docker cp k3s-server-1:/etc/rancher/k3s/k3s.yaml ./kubeconfig.yaml
-export KUBECONFIG="$PWD/kubeconfig.yaml"
-kubectl get nodes
-kubectl apply -f manifests/gpu-test-portable.yaml
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded \
-  pod/k3s-gpu-test-portable --timeout=180s
-kubectl logs k3s-gpu-test-portable
-```
-
-Docker Compose provides the same server with a stable node hostname and named volumes for persistent K3s state:
-
-```bash
-docker compose build
+docker compose down
 docker compose up -d
 ```
 
-## Join Computers Into A Cluster
-
-Run one container on each physical computer. K3s clustering remains unchanged: start one `server`, then start `agent` containers with the standard `K3S_URL` and `K3S_TOKEN` variables.
-
-Containers on different computers must expose their K3s node networking directly to the LAN. `--network host` is the only deployment difference from the single-container example; it avoids hiding each node and its Flannel interface behind a host-local Docker bridge.
-
-On the server computer:
+K3s, kubelet, CNI, and Tailscale identity state are stored in named Docker volumes. To intentionally delete the node and its local state:
 
 ```bash
-docker run --privileged \
-  --gpus all \
-  --network host \
-  --name k3s \
-  --hostname "$(hostname)" \
-  -v k3s-data:/var/lib/rancher/k3s \
-  -v k3s-cni:/var/lib/cni \
-  -v k3s-kubelet:/var/lib/kubelet \
-  -d k3s-cuda:v1.36.0-k3s1 \
-  server
-
-docker exec k3s cat /var/lib/rancher/k3s/server/node-token
+docker compose down -v
 ```
 
-On each agent computer:
+## 7. Troubleshooting
+
+Check status and logs first:
 
 ```bash
-docker run --privileged \
-  --gpus all \
-  --network host \
-  --name k3s \
-  --hostname "$(hostname)" \
-  -e K3S_URL=https://SERVER_LAN_IP:6443 \
-  -e K3S_TOKEN=SERVER_NODE_TOKEN \
-  -v k3s-data:/var/lib/rancher/k3s \
-  -v k3s-cni:/var/lib/cni \
-  -v k3s-kubelet:/var/lib/kubelet \
-  -d k3s-cuda:v1.36.0-k3s1 \
-  agent
+./scripts/status.sh
+docker compose logs --tail=200 k3s
 ```
 
-Each computer must have a unique hostname. Standard K3s firewall requirements also apply: TCP 6443 from agents to the server, UDP 8472 between nodes for default Flannel VXLAN, and TCP 10250 between nodes for metrics and kubelet access. Do not expose UDP 8472 to the public internet.
+If Tailscale connects but the Kubernetes node is not Ready, verify that the node and its advertised pod route are approved and that the tailnet policy allows `tag:k3s` and `10.42.0.0/16` to communicate.
 
-The server installs the NVIDIA device plugin as a DaemonSet, so Kubernetes starts it automatically on every joined GPU node.
+If a MagicDNS server name does not resolve, use the server's `100.x.y.z` address from `./scripts/get-token.sh`.
 
-## Published Images
+If a GPU is not detected, verify `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` and rerun the CUDA Docker test from the GPU prerequisites. CPU hosts must not select the GPU override.
 
-The GitHub workflow publishes `linux/amd64` images for tags matching `v*`. To use one, substitute the published image anywhere `k3s-cuda:v1.36.0-k3s1` appears:
+No host ports are published by default. K3s Services, NodePorts, and LoadBalancers remain in the appliance's network namespace. Publish a specific service explicitly only when you want it exposed on the workstation.
 
-```text
-ghcr.io/<owner>/<repository>:<tag>
-```
+The K3s Tailscale provider is currently experimental. This appliance intentionally supports one server with distributed agents; K3s does not support embedded-etcd control-plane nodes distributed through this mode.
 
-## Why `patchelf` Exists
+## Image Contents
 
-NixOS's injected `nvidia-smi` has an absolute ELF interpreter under `/nix/store`. A normal Ubuntu CUDA pod does not have that path.
+The image starts directly from `rancher/k3s:v1.36.0-k3s1` and does not replace K3s or embedded containerd. It adds Tailscale, NVIDIA CDI tooling, the NVIDIA device plugin, and a small lifecycle entrypoint. The image contains no NVIDIA driver or CUDA toolkit.
 
-The entrypoint copies `nvidia-smi` inside the K3s container and changes the copy only when its interpreter starts with `/nix/store/`. It never modifies the host. On Ubuntu, Debian, and other conventional hosts, no interpreter change is made.
+The NixOS compatibility path copies Docker-injected `nvidia-smi` inside the appliance and changes its ELF interpreter only when it points into `/nix/store`. It never modifies the host.
 
-This is limited to making the `nvidia-smi` utility portable. Driver libraries and devices still come from NVIDIA's normal Docker injection.
-
-## Scope
-
-- Validated on NixOS, RTX 4090, driver 595.99.02
-- Designed for x86_64 Linux hosts where the Docker prerequisite passes
-- Ubuntu and Debian still need physical cross-host validation
-- Privileged container; not a security boundary
+Git tags matching `v*` publish `linux/amd64` images to `ghcr.io/shiukaheng/k3s-cuda`.

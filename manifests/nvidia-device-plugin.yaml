@@ -19,13 +19,15 @@ spec:
         name: nvidia-device-plugin-ds
     spec:
       serviceAccountName: nvidia-device-plugin
+      automountServiceAccountToken: false
+      priorityClassName: system-node-critical
       tolerations:
         - operator: Exists
       containers:
         - image: nvcr.io/nvidia/k8s-device-plugin:v0.17.1
           name: nvidia-device-plugin-ctr
           args:
-            - --fail-on-init-error=true
+            - --fail-on-init-error=false
             - --device-list-strategy=cdi-cri
             - --pass-device-specs=false
             - --container-driver-root=/driver-root

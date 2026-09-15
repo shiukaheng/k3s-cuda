@@ -5,19 +5,35 @@ services:
       args:
         K3S_VERSION: ${K3S_VERSION:-v1.36.0-k3s1}
         NVIDIA_TOOLKIT_IMAGE: ${NVIDIA_TOOLKIT_IMAGE:-nvcr.io/nvidia/k8s/container-toolkit:v1.17.8-ubuntu20.04}
+        TAILSCALE_IMAGE: ${TAILSCALE_IMAGE:-tailscale/tailscale:v1.102.3}
     image: ${K3S_IMAGE:-k3s-cuda:v1.36.0-k3s1}
-    hostname: k3s-server-1
+    restart: unless-stopped
     privileged: true
-    gpus: all
-    ports:
-      - "6443:6443"
+    environment:
+      K3S_ROLE: ${K3S_ROLE:-agent}
+      K3S_NODE_NAME: ${K3S_NODE_NAME:-}
+      K3S_SERVER: ${K3S_SERVER:-}
+      K3S_TOKEN: ${K3S_TOKEN:-}
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_CONTROL_URL: ${TS_CONTROL_URL:-}
+      TS_HOSTNAME: ${TS_HOSTNAME:-}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
       - k3s-data:/var/lib/rancher/k3s
       - k3s-cni:/var/lib/cni
       - k3s-kubelet:/var/lib/kubelet
-    command: server
+      - tailscale-data:/var/lib/tailscale
+    stop_grace_period: 2m
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/appliance-health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 2m
 
 volumes:
   k3s-data:
   k3s-cni:
   k3s-kubelet:
+  tailscale-data:
