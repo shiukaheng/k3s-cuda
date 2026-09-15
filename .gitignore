@@ -6,7 +6,7 @@ kubeconfig.yaml
 # Host-specific/generated NVIDIA CDI specifications
 cdi/*.json
 
-# Generated runtime logs; keep the checked-in test report instead
+# Generated runtime logs
 logs/k3s-startup.log
 
 # Local Docker/build artifacts

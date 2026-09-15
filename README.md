@@ -118,10 +118,6 @@ manifests/nvidia-device-plugin.yaml
 manifests/gpu-test-portable.yaml
 ```
 
-## Diagnostic Fallback
-
-`manifests/gpu-test-known-good.yaml` and `manifests/nvidia-device-plugin-known-good.yaml` preserve the earlier NixOS-specific setup with explicit `/nix/store` and `/usr/local/nvidia` mounts. They are diagnostic references only: Compose does not apply them, the Dockerfile does not copy them, and they add nothing to the built image or normal runtime path.
-
 ## Scope
 
 - Validated on NixOS, RTX 4090, driver 595.99.02
@@ -129,5 +125,3 @@ manifests/gpu-test-portable.yaml
 - Ubuntu and Debian still need physical cross-host validation
 - Standalone single-node K3s server only
 - Privileged container; not a security boundary
-
-Experiment history and technical failures are recorded in `NOTES.md`. Test evidence is in `logs/test-results.md`.
