@@ -79,16 +79,23 @@ K3S_IMAGE=ghcr.io/<owner>/<repository>:<tag> \
 
 The GitHub workflow publishes `linux/amd64` images for tags matching `v*`.
 
-## What Is Custom
+## Relationship To Upstream K3s
 
-The image is still based on `rancher/k3s:v1.36.0-k3s1`. It adds only what the nested runtime needs:
+The image is based directly on `rancher/k3s:v1.36.0-k3s1`. It does not rebuild or replace K3s or its embedded containerd. It adds only the components required to pass Docker-provided NVIDIA devices into nested Kubernetes workloads:
 
-- NVIDIA `nvidia-ctk` CDI hook tooling, but no GPU driver
-- one small entrypoint that exposes Docker-injected driver files at a stable path
-- NVIDIA device plugin v0.17.1 configured with `cdi-cri`
-- `patchelf` for one conditional NixOS compatibility fix
+- NVIDIA `nvidia-ctk`, `ldconfig`, and their minimal runtime libraries for CDI injection
+- NVIDIA device plugin v0.17.1, configured with `cdi-cri` and installed automatically in server mode
+- a small entrypoint that exposes Docker-injected driver files at stable paths
+- `patchelf` for the conditional NixOS compatibility fix described below
 
-Docker supplies the physical host's matching driver and devices through `gpus: all`. The device plugin generates CDI paths inside the outer K3s container, and K3s's embedded containerd injects those files into GPU pods.
+The image does not contain an NVIDIA driver, CUDA toolkit, or workload image. Docker supplies the host's matching driver and devices through `gpus: all`.
+
+```text
+host NVIDIA driver -> Docker GPU injection -> K3s container
+  -> NVIDIA device plugin/CDI -> K3s containerd -> GPU workload
+```
+
+The device plugin advertises `nvidia.com/gpu` and generates the CDI specification. Embedded containerd then injects the allocated devices, driver libraries, and utilities into the workload. This is why workloads need only the GPU resource limit shown above.
 
 K3s data uses a Docker named volume, so embedded containerd can use its default `overlayfs` snapshotter directly on the host backing filesystem. This preserves image-layer sharing and avoids inefficient full-filesystem copies from the `native` snapshotter.
 
@@ -111,7 +118,9 @@ manifests/nvidia-device-plugin.yaml
 manifests/gpu-test-portable.yaml
 ```
 
-The `known-good` manifests preserve the old explicit NixOS mounts for diagnosis only.
+## Diagnostic Fallback
+
+`manifests/gpu-test-known-good.yaml` and `manifests/nvidia-device-plugin-known-good.yaml` preserve the earlier NixOS-specific setup with explicit `/nix/store` and `/usr/local/nvidia` mounts. They are diagnostic references only: Compose does not apply them, the Dockerfile does not copy them, and they add nothing to the built image or normal runtime path.
 
 ## Scope
 
