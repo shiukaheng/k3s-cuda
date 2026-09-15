@@ -18,8 +18,6 @@ services:
       - k3s-kubelet:/var/lib/kubelet
     command:
       - server
-      - --snapshotter
-      - native
       - --disable
       - traefik
       - --disable

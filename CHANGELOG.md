@@ -11,3 +11,4 @@ All notable changes will be documented in this file.
 - Run ordinary CUDA workloads with only an `nvidia.com/gpu` resource limit.
 - Preserve the previous explicit NixOS mount path as a diagnostic fallback.
 - Add a minimal Docker Compose deployment and GHCR publishing workflow.
+- Use K3s's default `overlayfs` snapshotter on Docker named volumes for efficient image-layer sharing.

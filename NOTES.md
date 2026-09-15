@@ -1,5 +1,9 @@
 # Experiment Notes
 
+## OverlayFS validation
+
+The final Compose deployment uses Docker named volumes for K3s state and K3s's default `overlayfs` snapshotter. This avoids nesting containerd's OverlayFS data inside the outer container's writable OverlayFS layer while retaining copy-on-write image sharing. The earlier `native` workaround below applied to the failed storage layout used during initial experiments.
+
 ## Minimal image iteration
 
 The documented K3s NVIDIA runtime approach was tested without `patchelf`. K3s correctly discovered the bundled `nvidia-container-runtime`, but the physical NixOS `nvidia-smi` retained its `/nix/store/.../ld-linux` interpreter when injected into the Ubuntu pod. NVIDIA's runtime does not rewrite ELF interpreters, so the pod failed with `exec /usr/bin/nvidia-smi: no such file or directory`.

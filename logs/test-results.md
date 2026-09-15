@@ -24,6 +24,7 @@ NVIDIA CDI hook tooling: v1.17.8
 docker compose build: PASS
 docker compose up -d: PASS
 Kubernetes node Ready: PASS
+containerd snapshotter: overlayfs
 NVIDIA device-plugin rollout: PASS
 GPU capacity: 1
 portable pod phase: Succeeded
@@ -31,7 +32,7 @@ portable pod exit code: 0
 known-good fallback: PASS
 ```
 
-The portable pod used `nvidia/cuda:12.8.1-base-ubuntu24.04`, requested `nvidia.com/gpu: 1`, and had no volumes or `RuntimeClass`.
+K3s state used Docker named volumes, allowing containerd's default `overlayfs` snapshotter to preserve image-layer sharing. The portable pod used `nvidia/cuda:12.8.1-base-ubuntu24.04`, requested `nvidia.com/gpu: 1`, and had no volumes or `RuntimeClass`.
 
 Its output included:
 

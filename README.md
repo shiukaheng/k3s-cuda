@@ -90,6 +90,8 @@ The image is still based on `rancher/k3s:v1.36.0-k3s1`. It adds only what the ne
 
 Docker supplies the physical host's matching driver and devices through `gpus: all`. The device plugin generates CDI paths inside the outer K3s container, and K3s's embedded containerd injects those files into GPU pods.
 
+K3s data uses a Docker named volume, so embedded containerd can use its default `overlayfs` snapshotter directly on the host backing filesystem. This preserves image-layer sharing and avoids inefficient full-filesystem copies from the `native` snapshotter.
+
 ## Why `patchelf` Exists
 
 NixOS's injected `nvidia-smi` has an absolute ELF interpreter under `/nix/store`. A normal Ubuntu CUDA pod does not have that path.
