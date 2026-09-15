@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: sh -n entrypoint.sh nvidia-ctk-wrapper.sh
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@2.0.0
+      - name: Reject workload host paths
+        run: |
+          if grep -E '/nix/store|/usr/local/nvidia|/usr/bin/nvidia-smi|hostPath:' manifests/gpu-test-portable.yaml; then
+            echo 'Portable workload contains a forbidden host path.' >&2
+            exit 1
+          fi
+      - name: Build image
+        run: docker compose build

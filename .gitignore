@@ -1,6 +1,7 @@
 # Generated K3s runtime state and credentials
 state/
 kubeconfig.yaml
+.env
 
 # Host-specific/generated NVIDIA CDI specifications
 cdi/*.json

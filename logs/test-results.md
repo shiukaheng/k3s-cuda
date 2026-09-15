@@ -1,47 +1,47 @@
-# Final Test Results
+# Test Results
 
 Date: 2026-09-15
 
-## Host prerequisites
+Result: `PORTABLE PASS`
 
-- NixOS: `26.11.20260905.c043004 (Zokor)`
-- Kernel: `6.18.49`
-- GPU: NVIDIA GeForce RTX 4090
-- NVIDIA driver: `595.99.02` (CUDA `13.2`)
-- Docker client/server: `29.7.2`
-- Docker reports native CDI devices: `nvidia.com/gpu=0`, `nvidia.com/gpu=all`
-- Outer Docker validation used `nvidia/cuda:12.8.1-base-ubuntu24.04` and returned the RTX 4090 through `nvidia-smi`.
+## Tested stack
 
-## K3s node
-
-```
-NAME                  STATUS   ROLES           VERSION        CONTAINER-RUNTIME
-k3s-gpu-test-server   Ready    control-plane   v1.36.0+k3s1   containerd://2.2.3-k3s1
-```
-
-Kubernetes node capacity and allocatable GPU values:
-
-```
-capacity.nvidia.com/gpu:    1
-allocatable.nvidia.com/gpu: 1
+```text
+Host: NixOS 26.11
+Architecture: x86_64
+GPU: NVIDIA GeForce RTX 4090
+Driver: 595.99.02
+Docker: 29.7.2
+K3s: v1.36.0+k3s1
+Embedded containerd: 2.2.3-k3s1
+NVIDIA device plugin: v0.17.1
+NVIDIA CDI hook tooling: v1.17.8
 ```
 
-## GPU workload
+## Minimal Compose validation
 
-The pod requested exactly `nvidia.com/gpu: 1` and was scheduled to `k3s-gpu-test-server`.
-
-```
-NAME                      READY   STATUS      IP           NODE
-k3s-gpu-test-nvidia-smi   0/1     Completed   10.42.0.10   k3s-gpu-test-server
-```
-
-Its terminated container state was `Completed`, exit code `0`.
-
-`kubectl logs k3s-gpu-test-nvidia-smi`:
-
-```
-NVIDIA-SMI 595.99.02              Driver Version: 595.99.02      CUDA Version: 13.2
-|   0  NVIDIA GeForce RTX 4090        Off |   00000000:01:00.0  On |
+```text
+docker compose build: PASS
+docker compose up -d: PASS
+Kubernetes node Ready: PASS
+NVIDIA device-plugin rollout: PASS
+GPU capacity: 1
+portable pod phase: Succeeded
+portable pod exit code: 0
+known-good fallback: PASS
 ```
 
-This `nvidia-smi` execution was inside the Kubernetes pod created by K3s's embedded containerd, not in the outer Docker K3s container.
+The portable pod used `nvidia/cuda:12.8.1-base-ubuntu24.04`, requested `nvidia.com/gpu: 1`, and had no volumes or `RuntimeClass`.
+
+Its output included:
+
+```text
+NVIDIA-SMI 595.99.02
+NVIDIA GeForce RTX 4090
+```
+
+## Interpreter finding
+
+The official NVIDIA runtime path was tested without rewriting `nvidia-smi`. K3s found `nvidia-container-runtime`, but the NixOS-injected binary retained an absolute `/nix/store/.../ld-linux-x86-64.so.2` interpreter and failed inside the Ubuntu pod.
+
+The final entrypoint copies that binary inside the outer node and changes the copy only when the interpreter starts with `/nix/store/`. No physical-host file is modified. This is not used for conventionally packaged `nvidia-smi` binaries.

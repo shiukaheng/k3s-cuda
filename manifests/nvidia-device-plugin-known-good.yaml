@@ -26,39 +26,24 @@ spec:
           name: nvidia-device-plugin-ctr
           args:
             - --fail-on-init-error=true
-            - --device-list-strategy=cdi-cri
-            - --pass-device-specs=false
-            - --container-driver-root=/driver-root
-            - --nvidia-driver-root=/run/k3s-nvidia/driver
-            - --nvidia-dev-root=/
+            - --pass-device-specs=true
           securityContext:
             privileged: true
           volumeMounts:
             - name: device-plugin
               mountPath: /var/lib/kubelet/device-plugins
-            - name: nvidia-driver-root
-              mountPath: /driver-root
-              readOnly: true
             - name: nvidia-libraries
-              mountPath: /usr/local/nvidia/lib64
+              mountPath: /usr/local/nvidia
               readOnly: true
             - name: host-dev
               mountPath: /dev
-            - name: cdi
-              mountPath: /var/run/cdi
       volumes:
         - name: device-plugin
           hostPath:
             path: /var/lib/kubelet/device-plugins
-        - name: nvidia-driver-root
-          hostPath:
-            path: /run/k3s-nvidia/driver
         - name: nvidia-libraries
           hostPath:
-            path: /run/k3s-nvidia/driver/lib64
+            path: /usr/local/nvidia
         - name: host-dev
           hostPath:
             path: /dev
-        - name: cdi
-          hostPath:
-            path: /var/run/cdi

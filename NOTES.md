@@ -1,5 +1,60 @@
 # Experiment Notes
 
+## Minimal image iteration
+
+The documented K3s NVIDIA runtime approach was tested without `patchelf`. K3s correctly discovered the bundled `nvidia-container-runtime`, but the physical NixOS `nvidia-smi` retained its `/nix/store/.../ld-linux` interpreter when injected into the Ubuntu pod. NVIDIA's runtime does not rewrite ELF interpreters, so the pod failed with `exec /usr/bin/nvidia-smi: no such file or directory`.
+
+The final image therefore keeps the proven CDI path and one conditional compatibility operation: copy injected `nvidia-smi` inside the outer container and use `patchelf` only when its interpreter is a Nix-store path. No host file is changed, and conventional Linux binaries are left untouched.
+
+Deployment was reduced to `compose.yaml`; lifecycle and test orchestration scripts were removed.
+
+## Portable result
+
+Final classification: `PORTABLE PASS`.
+
+The successful path uses Kubernetes `cdi-cri`, the NVIDIA device plugin's CDI generator, and K3s embedded containerd's default CDI support. The clean workload has no volumes. The CDI spec is generated in `/var/run/cdi` inside the K3s node, and every driver-library source resolves through `/run/k3s-nvidia/driver` in that same outer-container namespace.
+
+## Portable attempt 4
+
+Result -> PASS. After adding the toolkit's `ldconfig` to the K3s image, `k3s-gpu-test-portable` completed with exit code 0 and reported the RTX 4090 through driver 595.99.02. The previous explicit-mount fallback also completed under the new CDI plugin configuration.
+
+## Portable attempt 3
+
+Failure -> the included `nvidia-ctk` hook reached `update-ldcache`, but the minimal K3s image had no `/sbin/ldconfig`.
+
+Change -> include the toolkit image's `ldconfig` and `ldconfig.real`. These are runtime plumbing, not driver files.
+
+## Portable attempt 2
+
+Failure -> plugin-generated CDI had correct normalized library and device sources, but runc could not execute `/usr/bin/nvidia-ctk`. After adding the Ubuntu-built binary, Docker's injected NixOS loader cache caused it to select Nix glibc and fail with a GLIBC mismatch.
+
+Change -> include NVIDIA Container Toolkit 1.17.8 and its private Ubuntu glibc in the image. `/usr/bin/nvidia-ctk` is a static-shell wrapper that pins `LD_LIBRARY_PATH` before executing `/usr/libexec/nvidia-ctk`.
+
+## Portable attempt 1
+
+Failure -> CDI mode initially classified the plugin as non-NVML because its process loader could not see the normalized driver tree. The first generated spec also transformed `/dev` paths under the driver root.
+
+Change -> expose normalized libraries at the plugin image's `/usr/local/nvidia/lib64`, set discovery root to `/driver-root`, target driver root to `/run/k3s-nvidia/driver`, and target device root to `/`.
+
+This produced correct CDI sources from embedded containerd's perspective:
+
+```text
+/run/k3s-nvidia/driver/lib64/...
+/run/k3s-nvidia/driver/usr/bin/nvidia-smi
+/dev/nvidia0
+/dev/nvidiactl
+```
+
+## Upstream findings
+
+- CDI `hostPath` is relative to the consuming runtime's host namespace: <https://github.com/cncf-tags/container-device-interface/blob/main/SPEC.md#oci-edits>
+- NVIDIA CDI generation and standard `/etc/cdi`, `/var/run/cdi` locations: <https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/cdi-support.html>
+- `nvidia-ctk cdi generate` driver-root discovery and `cdi transform root` are supported, but a root transform is valid only when the transformed source exists in the consumer namespace: <https://github.com/NVIDIA/nvidia-container-toolkit/tree/main/cmd/nvidia-ctk/cdi>
+- K3s containerd configuration and NVIDIA runtime discovery: <https://docs.k3s.io/advanced#configuring-containerd>
+- Device plugin v0.17.1 supports `envvar`, `volume-mounts`, `cdi-annotations`, and `cdi-cri`: <https://github.com/NVIDIA/k8s-device-plugin/blob/v0.17.1/README.md#device-list-strategy>
+- `cdi-cri` is appropriate because CDI devices in the device-plugin API are GA in Kubernetes 1.31 and K3s is v1.36. Device plugin v0.17.1 writes its own matching CDI spec when a CDI strategy is enabled.
+- `pass-device-specs` is not used in CDI-only mode; it is primarily for CPU Manager compatibility.
+
 ## Attempt 1
 
 Initial build failure -> the current minimal K3s image has no package manager, so it cannot install `nvidia-container-toolkit` with `apk`.
@@ -54,6 +109,6 @@ Result -> pending.
 
 Result from attempt 2 -> K3s reached Ready with `native`, and the device-plugin pod loaded NVML and identified the RTX 4090. The plugin then failed while generating its allocation CDI specification because it searched its default `/driver-root` and could not find `libcuda.so.595.99.02`.
 
-Change -> mount Docker-injected `/usr/local/nvidia` into the plugin, set `--container-driver-root=/usr/local/nvidia`, and make a test-local `cdi/` directory writable by both the plugin and inner containerd. `run.sh` copies the host's static NVIDIA CDI spec into that directory on each fresh run.
+Change -> mount Docker-injected `/usr/local/nvidia` into the plugin, set `--container-driver-root=/usr/local/nvidia`, and make a test-local `cdi/` directory writable by both the plugin and inner containerd. The test orchestration copied the host's static NVIDIA CDI spec into that directory on each fresh run.
 
 Result -> pending.

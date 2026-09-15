@@ -1,50 +1,122 @@
-# Containerized K3s GPU experiment
+# K3s GPU Node Image
 
-This directory is an isolated, one-node experiment. It does not install K3s on NixOS or alter NixOS, Docker, containerd, firewalls, or host networking.
+One Docker container becomes a standalone K3s node with NVIDIA GPU support.
 
-## Architecture
+Kubernetes workloads only need:
 
+```yaml
+resources:
+  limits:
+    nvidia.com/gpu: 1
 ```
-NixOS NVIDIA driver -> Docker CDI/NVIDIA runtime -> privileged K3s container
-  -> K3s embedded containerd -> NVIDIA device-plugin -> GPU pod
+
+No workload `hostPath`, `/nix/store`, `/usr/local/nvidia`, or `RuntimeClass` is required.
+
+## Requirements
+
+- x86_64 Linux
+- NVIDIA driver
+- Docker with NVIDIA Container Toolkit integration
+- Docker Compose
+
+This must work first:
+
+```bash
+docker run --rm --gpus all \
+  nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
 ```
 
-The outer Docker daemon injects NVIDIA device nodes, driver libraries, `nvidia-smi`, and the required Nix-store driver/glibc paths with `--gpus all`. The deployed device plugin uses its supported `pass-device-specs` mode: after scheduling an `nvidia.com/gpu` request, kubelet passes the allocated NVIDIA character devices through K3s's embedded containerd. The workload manifest mounts the matching Docker-injected `/usr/local/nvidia` driver tree, `/usr/bin/nvidia-smi`, and only the outer container's injected `/nix/store` view from its K3s node. This avoids injecting a second NVIDIA runtime into the minimal K3s image. K3s v1.36's CDI-capable containerd was also tested; the failed NixOS CDI path experiment is recorded in `NOTES.md`.
+## Start
 
-## Prerequisites
+```bash
+docker compose build
+docker compose up -d
+```
 
-- NixOS host NVIDIA driver with `nvidia-smi` working.
-- Docker with NVIDIA GPU support: `docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi`.
-- Host NVIDIA CDI specification at `/run/cdi/nvidia-container-toolkit.json`.
+Wait for the node and GPU plugin:
 
-## Commands
+```bash
+docker compose logs -f k3s
+```
 
-Build: `./build.sh`
+Copy the kubeconfig:
 
-Run K3s: `./run.sh`
+```bash
+docker compose cp k3s:/etc/rancher/k3s/k3s.yaml ./kubeconfig.yaml
+export KUBECONFIG="$PWD/kubeconfig.yaml"
+kubectl get nodes
+```
 
-Use the generated kubeconfig: `export KUBECONFIG="$PWD/kubeconfig.yaml"`
+Test the GPU:
 
-Deploy the pinned NVIDIA device plugin: `kubectl apply -f manifests/nvidia-device-plugin.yaml`
+```bash
+kubectl apply -f manifests/gpu-test-portable.yaml
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded \
+  pod/k3s-gpu-test-portable --timeout=180s
+kubectl logs k3s-gpu-test-portable
+```
 
-Wait for it: `kubectl -n kube-system rollout status daemonset/nvidia-device-plugin-daemonset --timeout=180s`
+Stop while keeping the cluster:
 
-Inspect capacity: `kubectl get nodes && kubectl describe node`
+```bash
+docker compose down
+```
 
-Run the workload: `kubectl apply -f manifests/gpu-test.yaml && kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/k3s-gpu-test-nvidia-smi --timeout=180s && kubectl logs k3s-gpu-test-nvidia-smi`
+Delete the cluster and its volumes:
 
-Cleanup only this experiment: `./cleanup.sh`; include `--image` to also remove the local image.
+```bash
+docker compose down -v
+```
 
-The final recorded evidence is in `logs/test-results.md`.
+## Use A Published Image
 
-## Container options
+Set the image and skip the build:
 
-- `--privileged` is needed for the nested K3s kubelet, embedded containerd, CNI and mount operations.
-- `--gpus all` is required to inject physical NVIDIA devices and host driver libraries into the outer K3s container.
-- The test-local `cdi/` mount keeps the host CDI specification available for inspection without modifying the host CDI directory. The validated path uses direct CRI device specs because of a NixOS library-path mismatch in the device plugin's generated CDI spec.
-- The bind-mounted `state/` keeps all K3s mutable state in this experiment directory and is removed by `run.sh` before a fresh run.
-- `--snapshotter native` is necessary because K3s data lives on Docker overlayfs, which cannot host a nested overlayfs snapshotter. It trades image-layer efficiency for compatibility.
+```bash
+K3S_IMAGE=ghcr.io/<owner>/<repository>:<tag> \
+  docker compose up -d --no-build
+```
 
-## Scope and caveats
+The GitHub workflow publishes `linux/amd64` images for tags matching `v*`.
 
-This is intentionally a privileged, single-node development experiment. Nested container runtimes and CDI bind mounts are not a production isolation boundary. See `NOTES.md` and `logs/` for actual run evidence and failures.
+## What Is Custom
+
+The image is still based on `rancher/k3s:v1.36.0-k3s1`. It adds only what the nested runtime needs:
+
+- NVIDIA `nvidia-ctk` CDI hook tooling, but no GPU driver
+- one small entrypoint that exposes Docker-injected driver files at a stable path
+- NVIDIA device plugin v0.17.1 configured with `cdi-cri`
+- `patchelf` for one conditional NixOS compatibility fix
+
+Docker supplies the physical host's matching driver and devices through `gpus: all`. The device plugin generates CDI paths inside the outer K3s container, and K3s's embedded containerd injects those files into GPU pods.
+
+## Why `patchelf` Exists
+
+NixOS's injected `nvidia-smi` has an absolute ELF interpreter under `/nix/store`. A normal Ubuntu CUDA pod does not have that path.
+
+The entrypoint copies `nvidia-smi` inside the K3s container and changes the copy only when its interpreter starts with `/nix/store/`. It never modifies the host. On Ubuntu, Debian, and other conventional hosts, no interpreter change is made.
+
+This is limited to making the `nvidia-smi` utility portable. Driver libraries and devices still come from NVIDIA's normal Docker injection.
+
+## Files
+
+```text
+Dockerfile                         custom K3s image
+compose.yaml                       complete deployment
+entrypoint.sh                      driver view and plugin installation
+nvidia-ctk-wrapper.sh              isolates toolkit glibc on NixOS
+manifests/nvidia-device-plugin.yaml
+manifests/gpu-test-portable.yaml
+```
+
+The `known-good` manifests preserve the old explicit NixOS mounts for diagnosis only.
+
+## Scope
+
+- Validated on NixOS, RTX 4090, driver 595.99.02
+- Designed for x86_64 Linux hosts where the Docker prerequisite passes
+- Ubuntu and Debian still need physical cross-host validation
+- Standalone single-node K3s server only
+- Privileged container; not a security boundary
+
+Experiment history and technical failures are recorded in `NOTES.md`. Test evidence is in `logs/test-results.md`.
