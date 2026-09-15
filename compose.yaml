@@ -5,30 +5,19 @@ services:
       args:
         K3S_VERSION: ${K3S_VERSION:-v1.36.0-k3s1}
         NVIDIA_TOOLKIT_IMAGE: ${NVIDIA_TOOLKIT_IMAGE:-nvcr.io/nvidia/k8s/container-toolkit:v1.17.8-ubuntu20.04}
-    image: ${K3S_IMAGE:-k3s-gpu-test:v1.36.0-k3s1}
-    container_name: k3s-gpu-test-server
-    hostname: k3s-gpu-test-server
+    image: ${K3S_IMAGE:-k3s-cuda:v1.36.0-k3s1}
+    hostname: k3s-server-1
     privileged: true
     gpus: all
     ports:
-      - "127.0.0.1:6443:6443"
+      - "6443:6443"
     volumes:
       - k3s-data:/var/lib/rancher/k3s
       - k3s-cni:/var/lib/cni
       - k3s-kubelet:/var/lib/kubelet
-    command:
-      - server
-      - --disable
-      - traefik
-      - --disable
-      - servicelb
-      - --write-kubeconfig-mode
-      - "644"
+    command: server
 
 volumes:
   k3s-data:
-    name: k3s-gpu-test-data
   k3s-cni:
-    name: k3s-gpu-test-cni
   k3s-kubelet:
-    name: k3s-gpu-test-kubelet

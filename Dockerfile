@@ -38,3 +38,4 @@ LABEL org.opencontainers.image.title="containerized-k3s-gpu-node" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 ENTRYPOINT ["/usr/local/bin/k3s-gpu-entrypoint"]
+CMD ["agent"]

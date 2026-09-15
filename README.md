@@ -1,8 +1,14 @@
-# K3s GPU Node Image
+# K3s With NVIDIA Support
 
-One Docker container becomes a standalone K3s node with NVIDIA GPU support.
+This is a drop-in derivative of the official `rancher/k3s` image that adds NVIDIA GPU support. It keeps the upstream K3s binary, embedded containerd, defaults, commands, flags, and environment variables unchanged.
 
-Kubernetes workloads only need:
+Use it like `rancher/k3s`, with one additional Docker option:
+
+```text
+--gpus all
+```
+
+GPU workloads then need only:
 
 ```yaml
 resources:
@@ -12,92 +18,123 @@ resources:
 
 No workload `hostPath`, `/nix/store`, `/usr/local/nvidia`, or `RuntimeClass` is required.
 
-## Requirements
+## What The Image Changes
 
-- x86_64 Linux
-- NVIDIA driver
-- Docker with NVIDIA Container Toolkit integration
-- Docker Compose
+The image is based directly on `rancher/k3s:v1.36.0-k3s1`. It does not rebuild K3s, replace embedded containerd, or change K3s configuration.
 
-This must work first:
-
-```bash
-docker run --rm --gpus all \
-  nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
-```
-
-## Start
-
-```bash
-docker compose build
-docker compose up -d
-```
-
-Wait for the node and GPU plugin:
-
-```bash
-docker compose logs -f k3s
-```
-
-Copy the kubeconfig:
-
-```bash
-docker compose cp k3s:/etc/rancher/k3s/k3s.yaml ./kubeconfig.yaml
-export KUBECONFIG="$PWD/kubeconfig.yaml"
-kubectl get nodes
-```
-
-Test the GPU:
-
-```bash
-kubectl apply -f manifests/gpu-test-portable.yaml
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded \
-  pod/k3s-gpu-test-portable --timeout=180s
-kubectl logs k3s-gpu-test-portable
-```
-
-Stop while keeping the cluster:
-
-```bash
-docker compose down
-```
-
-Delete the cluster and its volumes:
-
-```bash
-docker compose down -v
-```
-
-## Use A Published Image
-
-Set the image and skip the build:
-
-```bash
-K3S_IMAGE=ghcr.io/<owner>/<repository>:<tag> \
-  docker compose up -d --no-build
-```
-
-The GitHub workflow publishes `linux/amd64` images for tags matching `v*`.
-
-## Relationship To Upstream K3s
-
-The image is based directly on `rancher/k3s:v1.36.0-k3s1`. It does not rebuild or replace K3s or its embedded containerd. It adds only the components required to pass Docker-provided NVIDIA devices into nested Kubernetes workloads:
+It adds only:
 
 - NVIDIA `nvidia-ctk`, `ldconfig`, and their minimal runtime libraries for CDI injection
-- NVIDIA device plugin v0.17.1, configured with `cdi-cri` and installed automatically in server mode
-- a small entrypoint that exposes Docker-injected driver files at stable paths
+- NVIDIA device plugin v0.17.1, configured with `cdi-cri`
+- a small entrypoint that prepares Docker-injected driver files, installs the device-plugin manifest on servers, and then runs `/bin/k3s` with the original arguments
 - `patchelf` for the conditional NixOS compatibility fix described below
 
-The image does not contain an NVIDIA driver, CUDA toolkit, or workload image. Docker supplies the host's matching driver and devices through `gpus: all`.
+The image does not contain an NVIDIA driver, CUDA toolkit, or workload image. Docker supplies the host's matching driver and devices.
 
 ```text
 host NVIDIA driver -> Docker GPU injection -> K3s container
   -> NVIDIA device plugin/CDI -> K3s containerd -> GPU workload
 ```
 
-The device plugin advertises `nvidia.com/gpu` and generates the CDI specification. Embedded containerd then injects the allocated devices, driver libraries, and utilities into the workload. This is why workloads need only the GPU resource limit shown above.
+## Requirements
 
-K3s data uses a Docker named volume, so embedded containerd can use its default `overlayfs` snapshotter directly on the host backing filesystem. This preserves image-layer sharing and avoids inefficient full-filesystem copies from the `native` snapshotter.
+- x86_64 Linux
+- NVIDIA driver
+- Docker with NVIDIA Container Toolkit integration
+
+Confirm Docker GPU injection works first:
+
+```bash
+docker run --rm --gpus all \
+  nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
+```
+
+## Run A Server
+
+This follows the official K3s Docker example, adding only `--gpus all` and this image name:
+
+```bash
+docker build -t k3s-cuda:v1.36.0-k3s1 .
+
+docker run --privileged \
+  --gpus all \
+  --name k3s-server-1 \
+  --hostname k3s-server-1 \
+  -p 6443:6443 \
+  -d k3s-cuda:v1.36.0-k3s1 \
+  server
+```
+
+Copy the kubeconfig and test the GPU:
+
+```bash
+docker cp k3s-server-1:/etc/rancher/k3s/k3s.yaml ./kubeconfig.yaml
+export KUBECONFIG="$PWD/kubeconfig.yaml"
+kubectl get nodes
+kubectl apply -f manifests/gpu-test-portable.yaml
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded \
+  pod/k3s-gpu-test-portable --timeout=180s
+kubectl logs k3s-gpu-test-portable
+```
+
+Docker Compose provides the same server with a stable node hostname and named volumes for persistent K3s state:
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+## Join Computers Into A Cluster
+
+Run one container on each physical computer. K3s clustering remains unchanged: start one `server`, then start `agent` containers with the standard `K3S_URL` and `K3S_TOKEN` variables.
+
+Containers on different computers must expose their K3s node networking directly to the LAN. `--network host` is the only deployment difference from the single-container example; it avoids hiding each node and its Flannel interface behind a host-local Docker bridge.
+
+On the server computer:
+
+```bash
+docker run --privileged \
+  --gpus all \
+  --network host \
+  --name k3s \
+  --hostname "$(hostname)" \
+  -v k3s-data:/var/lib/rancher/k3s \
+  -v k3s-cni:/var/lib/cni \
+  -v k3s-kubelet:/var/lib/kubelet \
+  -d k3s-cuda:v1.36.0-k3s1 \
+  server
+
+docker exec k3s cat /var/lib/rancher/k3s/server/node-token
+```
+
+On each agent computer:
+
+```bash
+docker run --privileged \
+  --gpus all \
+  --network host \
+  --name k3s \
+  --hostname "$(hostname)" \
+  -e K3S_URL=https://SERVER_LAN_IP:6443 \
+  -e K3S_TOKEN=SERVER_NODE_TOKEN \
+  -v k3s-data:/var/lib/rancher/k3s \
+  -v k3s-cni:/var/lib/cni \
+  -v k3s-kubelet:/var/lib/kubelet \
+  -d k3s-cuda:v1.36.0-k3s1 \
+  agent
+```
+
+Each computer must have a unique hostname. Standard K3s firewall requirements also apply: TCP 6443 from agents to the server, UDP 8472 between nodes for default Flannel VXLAN, and TCP 10250 between nodes for metrics and kubelet access. Do not expose UDP 8472 to the public internet.
+
+The server installs the NVIDIA device plugin as a DaemonSet, so Kubernetes starts it automatically on every joined GPU node.
+
+## Published Images
+
+The GitHub workflow publishes `linux/amd64` images for tags matching `v*`. To use one, substitute the published image anywhere `k3s-cuda:v1.36.0-k3s1` appears:
+
+```text
+ghcr.io/<owner>/<repository>:<tag>
+```
 
 ## Why `patchelf` Exists
 
@@ -107,21 +144,9 @@ The entrypoint copies `nvidia-smi` inside the K3s container and changes the copy
 
 This is limited to making the `nvidia-smi` utility portable. Driver libraries and devices still come from NVIDIA's normal Docker injection.
 
-## Files
-
-```text
-Dockerfile                         custom K3s image
-compose.yaml                       complete deployment
-entrypoint.sh                      driver view and plugin installation
-nvidia-ctk-wrapper.sh              isolates toolkit glibc on NixOS
-manifests/nvidia-device-plugin.yaml
-manifests/gpu-test-portable.yaml
-```
-
 ## Scope
 
 - Validated on NixOS, RTX 4090, driver 595.99.02
 - Designed for x86_64 Linux hosts where the Docker prerequisite passes
 - Ubuntu and Debian still need physical cross-host validation
-- Standalone single-node K3s server only
 - Privileged container; not a security boundary
